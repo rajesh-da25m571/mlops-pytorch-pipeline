@@ -68,7 +68,7 @@ spec:
           name: training-config
           items:
           - key: raw_config
-            path: training
+            path: training_config.yaml
       - name: storage-volume
         persistentVolumeClaim:
           claimName: model-checkpoint-pvc
