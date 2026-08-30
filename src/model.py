@@ -1,3 +1,4 @@
+#model.py
 import torch
 import torch.nn as nn
 
@@ -19,8 +20,9 @@ class SqueezeExcitation(nn.Module):
         return x * weights
 
 class SEResidualBlock(nn.Module):
-    def __init__(self, channels):
+    def __init__(self, channels, use_se=False):
         super().__init__()
+        self.use_se = use_se
         self.conv_block = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(channels),
@@ -28,18 +30,20 @@ class SEResidualBlock(nn.Module):
             nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(channels)
         )
-        self.se = SqueezeExcitation(channels)
+        if (self.use_se):
+            self.se = SqueezeExcitation(channels)
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
         residual = x
         out = self.conv_block(x)
-        out = self.se(out)
+        if (self.use_se):
+            out = self.se(out)
         out += residual
         return self.relu(out)
 
 class SEResNet(nn.Module):
-    def __init__(self, in_channels: int = 3, num_classes: int = 10):
+    def __init__(self, in_channels: int = 3, num_classes: int = 10, use_se=False):
         super().__init__()
         
         self.prep = nn.Sequential(
@@ -54,7 +58,7 @@ class SEResNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2)
         )
-        self.res1 = SEResidualBlock(128)
+        self.res1 = SEResidualBlock(128,use_se)
         
         self.layer2_conv = nn.Sequential(
             nn.Conv2d(128, 256, kernel_size=3, padding=1, bias=False),
@@ -69,7 +73,7 @@ class SEResNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2)
         )
-        self.res3 = SEResidualBlock(512)
+        self.res3 = SEResidualBlock(512, use_se)
         
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Sequential(
@@ -88,14 +92,14 @@ class SEResNet(nn.Module):
         x = self.pool(x)
         return self.fc(x)
 
-def get_pipeline_model(dataset_name: str, num_classes: int = 10) -> nn.Module:
+def get_pipeline_model(architecture:str, dataset_name: str, num_classes: int = 10,in_channels: int = 3, use_se = False) -> nn.Module:
     """
     Factory engine maps targeted user requirements into the unified architecture.
     """
     name = dataset_name.lower()
-    if name == "mnist":
-        return SEResNet(in_channels=1, num_classes=num_classes)
+    if name == "fashion_mnist":
+        return SEResNet(in_channels=1, num_classes=num_classes, use_se=True)
     elif name == "cifar10":
-        return SEResNet(in_channels=3, num_classes=num_classes)
+        return SEResNet(in_channels=3, num_classes=num_classes, use_se=False)
     else:
         raise ValueError(f"Unsupported pipeline dataset choice: {dataset_name}")
