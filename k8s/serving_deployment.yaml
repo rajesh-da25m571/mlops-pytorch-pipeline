@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlops-serving-deployment
+  namespace: ml-training          
+spec:
+  replicas: 2                     # Enforces the 2-replica requirement
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1                 # Allows 1 extra temporary pod during deployment
+      maxUnavailable: 0           # Guarantees zero downtime (always keeps 2 pods alive)
+  selector:
+    matchLabels:
+      app: inference-server
+  template:
+    metadata:
+      labels:
+        app: inference-server
+    spec:
+      securityContext:
+        runAsUser: 10001          # secure non-root user in Dockerfile
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+      - name: serving-engine
+        image: mlops-serve:v1     # local serving image tag
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080     # The internal port exposed by your app
+        env:
+        - name: CONFIG_PATH
+          value: "/app/configs/training_config.yaml"
+        - name: ACTIVE_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: training-config   # from configmap
+              key: ACTIVE_MODEL
+        resources:
+          requests:
+            cpu: "500m"           # Enforces assignment performance baseline
+            memory: "1Gi"
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          periodSeconds: 10
+          failureThreshold: 3       # Restarts container if it fails 3 times consecutively
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15   # Gives the PyTorch model 15 seconds to load first
+          periodSeconds: 5
+        volumeMounts:
+        - name: checkpoint-volume
+          mountPath: /app/checkpoints
+          subPath: checkpoints      # Points to saved weights folder
+          readOnly: true           # Enforces secure, read-only inference access
+      volumes:
+      - name: checkpoint-volume
+        persistentVolumeClaim:
+          claimName: mlops-pvc  # Binds to existing PVC

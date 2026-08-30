@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlops-serving-service
+  namespace: ml-training        
+spec:
+  type: ClusterIP              # internal cloud orchestration
+  ports:
+  - port: 80                   # The port accessible outside the service network boundary
+    targetPort: 8080           # Directs traffic down to your container port
+    protocol: TCP
+  selector:
+    app: inference-server      # serving deployment label
