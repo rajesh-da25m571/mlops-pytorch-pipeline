@@ -1,0 +1,38 @@
+
+# Toggle either "mnist" or "cifar10" to shift the entire pipeline
+active_dataset: "fashion_mnist"
+
+# Shared operational locations across the system
+data_dir: "/app/data"
+checkpoint_dir: "/app/data/checkpoints"
+
+# Dataset Profiles.
+
+datasets:
+  fashion_mnist:
+    model:
+      architecture: "se_resnet"
+      num_classes: 10
+      in_channels: 1
+      use_se: True
+    training:
+      epochs: 30
+      batch_size: 64
+      learning_rate: 0.001
+      early_stopping_patience: 5
+    output:
+      model_name: "best_custom_mnist_model.pth"
+
+  cifar10:
+    model:
+      architecture: "se_resnet"
+      num_classes: 10
+      in_channels: 3
+      use_se: False
+    training:
+      epochs: 50
+      batch_size: 128
+      learning_rate: 0.001
+      early_stopping_patience: 5
+    output:
+      model_name: "best_custom_cifar10_model.pth"

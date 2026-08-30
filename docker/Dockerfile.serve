@@ -1,0 +1,43 @@
+# Stage 1: Base with dependencies
+FROM python:3.11-slim AS base
+WORKDIR /app
+
+# update and install system dependencies. curl is used for health check.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+    
+# Copy and install python dependencies
+COPY requirements/serve.txt ./serve.txt
+RUN pip install --no-cache-dir -r serve.txt
+
+
+# Stage 2: Serving runtime
+FROM base AS serving
+
+# Secure non-root deployment permissions
+RUN groupadd -g 888 servegroup && \
+    useradd -r -u 888 -g servegroup serveuser && \
+    mkdir -p /app/data /app/configs && \
+    chown -R serveuser:servegroup /app
+
+USER serveuser
+
+# Copy inference backend code
+COPY --chown=serveuser:servegroup src/ ./src/
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src
+
+# Set environment variables for the serving runtime
+ENV TRAINING_CONFIG_PATH=/app/configs/training_config.yaml
+ENV ACTIVE_MODEL=fashion_mnist
+
+# default port for the inference service
+EXPOSE 8080
+
+# health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["uvicorn", "src.serve:app", "--host", "0.0.0.0", "--port", "8080"]

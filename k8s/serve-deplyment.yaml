@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlops-serve-deployment
+  labels:
+    app: inference-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: inference-server
+  template:
+    metadata:
+      labels:
+        app: inference-server
+    spec:
+      securityContext:
+        runAsUser: 888
+        runAsGroup: 888
+        fsGroup: 888
+      containers:
+        - name: server
+          image: mlops-pytorch-serve:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ACTIVE_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: ACTIVE_MODEL
+          volumeMounts:
+            - name: storage-volume
+              mountPath: /app/data
+              readOnly: true # Follows Least Privilege by restricting write access
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: storage-volume
+          persistentVolumeClaim:
+            claimName: mlops-pvc
