@@ -50,25 +50,26 @@ def evaluate(model, loader, criterion, device) -> tuple[float, float]:
     return total_loss / total, correct / total
 
 def load_config(path: str) -> dict:
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
-
+        
 def main():
-    # Config routing
-    config_path = Path("/app/configs/training_config.yaml")
+    # 1. Config routing
+    config_path = os.environ.get("CONFIG_PATH", "/app/configs/training_config.yaml")
     if not config_path.exists():
-        config_path = Path(r"D:/Project/training_config.yaml")
-        print(config_path)
+        return print(f"Configuration file not found at {config_path}. Please ensure the path is correct.", flush=True)
+    
     full_config = load_config(str(config_path))
-    dataset_name = full_config["active_dataset"] 
+    dataset_name = os.environ.get("ACTIVE_MODEL", full_config.get("active_dataset"))
     config = full_config["datasets"][dataset_name]
     data_dir = full_config["data_dir"]
     checkpoint_dir = Path(full_config["checkpoint_dir"])
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
-    # GPU or CPU
+    # 2. GPU or CPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Model construction using the custom CNN factory settings
+    # 3. Model construction
     model = get_pipeline_model(
         architecture=config["model"]["architecture"],
         dataset_name=dataset_name,
@@ -77,25 +78,43 @@ def main():
         use_se=config["model"]["use_se"]
     ).to(device)
     
-    # 4. Fetch data loaders dynamically
+    # 4. Fetch data loaders
     train_loader, val_loader = get_dataloaders(
         dataset_name=dataset_name,
         data_dir=data_dir,
         batch_size=config["training"]["batch_size"]
     )
     
-    # 5. Optimization tracking configurations
+    #  Optimization tracking configurations
     optimizer = torch.optim.AdamW(model.parameters(), lr=config["training"]["learning_rate"])
     criterion = nn.CrossEntropyLoss()
     
+    # Checkpoint Path Alignment
+    default_save_path = checkpoint_dir / config["output"]["model_name"]
+    checkpoint_path = Path(os.getenv("CHECKPOINT_PATH", str(default_save_path)))
+
+    start_epoch = 0
     best_val_loss = float("inf")
     patience_counter = 0
     patience = config["training"]["early_stopping_patience"]
-    #checkpoint_dir = Path(config["output"]["checkpoint_dir"])
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 6. Training iteration execution
-    for epoch in range(config["training"]["epochs"]):
+
+    # Resume Logic
+    if checkpoint_path.exists():
+        print(f"Loading existing checkpoint from: {checkpoint_path}", flush=True)
+        checkpoint = torch.load(checkpoint_path, map_location=torch.device('cpu'))
+        
+        model.load_state_dict(checkpoint['model_state_dict'])
+        
+        if 'optimizer_state_dict' in checkpoint:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        start_epoch = checkpoint.get('epoch', 0)
+        best_val_loss = checkpoint.get('val_loss', float("inf"))
+        print(f"Resuming training from Epoch {start_epoch + 1} (Best Val Loss: {best_val_loss:.4f})", flush=True)
+
+    # Training execution using start_epoch offset
+    total_epochs = config["training"]["epochs"]
+    for epoch in range(start_epoch, total_epochs):
         train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device)
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
         
@@ -112,7 +131,6 @@ def main():
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
-            save_path = checkpoint_dir / config["output"]["model_name"]
             
             torch.save({
                 "epoch": epoch + 1,
@@ -120,9 +138,9 @@ def main():
                 "optimizer_state_dict": optimizer.state_dict(),
                 "val_loss": val_loss,
                 "val_accuracy": val_acc,
-            }, save_path)
+            }, default_save_path)
             
-            print(json.dumps({"event": "checkpoint_saved", "path": str(save_path)}), flush=True)
+            print(json.dumps({"event": "checkpoint_saved", "path": str(default_save_path)}), flush=True)
         else:
             patience_counter += 1
             if patience_counter >= patience:

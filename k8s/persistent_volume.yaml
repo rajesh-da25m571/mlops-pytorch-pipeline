@@ -16,7 +16,8 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: mlops-pvc
+  name: mlops-pvc  # matches the claimName in the training_job.yaml
+  namespace: ml-training      
 spec:
   storageClassName: manual
   accessModes:

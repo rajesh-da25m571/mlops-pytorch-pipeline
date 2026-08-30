@@ -1,24 +1,24 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: mlops-config
+  name: training-config
+  namespace: ml-training
 data:
   ACTIVE_MODEL: "cifar10"
-  # Embedded training profile parsed directly by the main execution container
   training_config.yaml: |
     model:
       architecture: "se_resnet"
       num_classes: 10
       in_channels: 3
-      use_se: true
+      use_se: false
     data:
       dataset_name: "cifar10"
       data_dir: "/app/data"
     training:
       batch_size: 64
       learning_rate: 0.001
-      epochs: 15
-      early_stopping_patience: 3
+      epochs: 50
+      early_stopping_patience: 5
     output:
-      checkpoint_dir: "/app/data/checkpoints"
-      model_name: "cifar10_best.pth"
+      checkpoint_dir: "/app/checkpoints"
+      model_name: "best_custom_cifar10_model.pth"

@@ -32,7 +32,7 @@ def configure_inference_runtime():
     global model, model_type
     
     # 1. FIXED: Point directly to your single-source-of-truth configuration file
-    config_path = os.getenv("TRAINING_CONFIG_PATH", "/app/configs/training_config.yaml")
+    config_path = os.getenv("CONFIG_PATH", "/app/configs/training_config.yaml")
     if not os.path.exists(config_path):
         config_path = "D:/Project/training_config.yaml"  # Local fallback directory
         
