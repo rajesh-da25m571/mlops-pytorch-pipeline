@@ -16,7 +16,8 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: mlops-pvc
+  name: model-checkpoint-pvc
+  namespace: ml-training
 spec:
   storageClassName: manual
   accessModes:

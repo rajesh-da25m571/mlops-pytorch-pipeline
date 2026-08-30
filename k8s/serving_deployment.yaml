@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlops-serving-deployment
+  namespace: ml-training
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: inference-server
+  template:
+    metadata:
+      labels:
+        app: inference-server
+    spec:
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+      - name: serving-engine
+        image: mlops-serve:v1
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: CONFIG_PATH
+          value: "/app/configs/training"
+        - name: ACTIVE_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: training-config
+              key: ACTIVE_MODEL
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 5
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/configs
+        - name: storage-volume
+          mountPath: /app/checkpoints
+          subPath: checkpoints
+          readOnly: true
+      volumes:
+      - name: config-volume
+        configMap:
+          name: training-config
+          items:
+          - key: raw_config
+            path: training
+      - name: storage-volume
+        persistentVolumeClaim:
+          claimName: model-checkpoint-pvc
