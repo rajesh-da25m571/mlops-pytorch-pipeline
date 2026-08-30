@@ -1,20 +1,23 @@
-# Stage 1: Base image with Python and dependencies
 FROM python:3.11-slim AS base
+
 WORKDIR /app
 
-# Install system dependencies
+# Minimal C++ and image libraries required by torchvision and OS
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    gcc \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install python dependencies
-COPY requirements/train.txt .
-RUN pip install --no-cache-dir -r requirements/train.txt
+RUN pip install --no-cache-dir --upgrade pip
 
-# Stage 2: Training runtime
+# Install all dependencies directly from requirements
+COPY requirements/train.txt .
+RUN pip install --no-cache-dir -r train.txt
+
 FROM base AS training
 
-# Create a non-root group and user for security compliance
 RUN groupadd -g 999 appgroup && \
     useradd -r -u 999 -g appgroup appuser && \
     mkdir -p /app/data && \
@@ -22,11 +25,9 @@ RUN groupadd -g 999 appgroup && \
 
 USER appuser
 
-# Copy training and parameter files
 COPY --chown=appuser:appgroup src/ ./src/
-COPY --chown=appuser:appgroup config/ ./config/
+COPY --chown=appuser:appgroup configs/ ./configs/
 
-# flush output streams to avoid buffering issues in logs
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src
 ENV TRAINING_CONFIG_PATH=/app/configs/training_config.yaml

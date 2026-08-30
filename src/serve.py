@@ -8,38 +8,78 @@ from PIL import Image
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from model import get_pipeline_model
 
-app = FastAPI(title="Multi-Model SE-ResNet Inference Service Engine")
+app = FastAPI(title="Multi-Model Dynamic Inference Service Engine")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Global variables updated dynamically at container boot
 model = None
-model_type = "cifar10"
+model_type = "fashion_mnist"
 
+# FIXED: Explicit label arrays mapped to your operational profiles
 LABELS_MAP = {
-    "mnist": [str(i) for i in range(10)],
-    "cifar10": ["airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"]
+    "fashion_mnist": [
+        "T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
+        "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"
+    ],
+    "cifar10": [
+        "airplane", "automobile", "bird", "cat", "deer", 
+        "dog", "frog", "horse", "ship", "truck"
+    ]
 }
 
 @app.on_event("startup")
 def configure_inference_runtime():
     global model, model_type
     
-    deploy_cfg_path = os.getenv("DEPLOY_CONFIG_PATH", "config/deploy_config.yaml")
-    with open(deploy_cfg_path, "r") as f:
-        cfg = yaml.safe_load(f)
+    # 1. FIXED: Point directly to your single-source-of-truth configuration file
+    config_path = os.getenv("TRAINING_CONFIG_PATH", "/app/configs/training_config.yaml")
+    if not os.path.exists(config_path):
+        config_path = "D:/Project/training_config.yaml"  # Local fallback directory
         
-    model_type = os.getenv("ACTIVE_MODEL", cfg.get("active_serving_model", "cifar10")).lower()
+    with open(config_path, "r") as f:
+        raw_config = yaml.safe_load(f)
+        
+    # 2. DYNAMIC ROUTING: Determine model target from env variable or fallback yaml key
+    model_type = os.getenv("ACTIVE_MODEL", raw_config.get("active_dataset", "fashion_mnist")).lower()
     
-    # Intialize your structural factory block architecture
-    model = get_pipeline_model(dataset_name=model_type, num_classes=10)
+    if model_type not in LABELS_MAP:
+        raise RuntimeError(f"Unsupported active serving model token configuration: {model_type}")
+        
+    # Extract the configuration parameters for the selected dataset
+    dataset_cfg = raw_config["datasets"][model_type]
     
-    w_key = "mnist_weights_path" if model_type == "mnist" else "cifar10_weights_path"
-    weights_path = cfg.get(w_key, f"data/{model_type}_best.pth")
+    print(f"Initializing container runtime infrastructure for model: {model_type.upper()}")
+    
+    # 3. FIXED: Pass config block data downstream to instantiate the correct input dimensions
+    model = get_pipeline_model(
+        architecture=dataset_cfg["model"]["architecture"],
+        dataset_name=model_type,
+        num_classes=int(dataset_cfg["model"]["num_classes"]),
+        use_se=bool(dataset_cfg["model"]["use_se"])
+    )
+    
+    # Locate weight path
+    checkpoint_dir = raw_config.get("checkpoint_dir", "/app/checkpoints")
+    model_name = dataset_cfg["output"]["model_name"]
+    weights_path = os.path.join(checkpoint_dir, model_name)
+    
+    if not os.path.exists(weights_path):
+        # Fallback to current working data context if root absolute directory path is missing
+        weights_path = os.path.join("/app/checkpoints", model_name)
     
     if os.path.exists(weights_path):
-        model.load_state_dict(torch.load(weights_path, map_location=device))
-        print(f"Successfully loaded {model_type} weights architecture from {weights_path}")
+        print(f"Loading serialized matrix weights from checkpoint file: {weights_path}")
+        raw_checkpoint = torch.load(weights_path, map_location=device)
+        
+        # Safely unpack 'model_state_dict' from the dictionary payload structure
+        if isinstance(raw_checkpoint, dict) and "model_state_dict" in raw_checkpoint:
+            model.load_state_dict(raw_checkpoint["model_state_dict"])
+        else:
+            model.load_state_dict(raw_checkpoint)
+            
+        print(f"Successfully mounted weight definitions onto architecture layers.")
     else:
-        print(f"Warning: Checkpoint not found at {weights_path}. Running base weights.")
+        print(f"Warning: Checkpoint weights not found at {weights_path}. Running base weights.")
         
     model.to(device)
     model.eval()
@@ -58,13 +98,13 @@ async def process_inference(file: UploadFile = File(...)):
     try:
         img = Image.open(io.BytesIO(await file.read()))
         
-        # Matches your exact padding and normalization schemas
-        if model_type == "mnist":
+        # Apply preprocessing transforms explicitly matching the active dataset profile
+        if model_type == "fashion_mnist":
             transform = transforms.Compose([
                 transforms.Resize((28, 28)),
-                transforms.Pad(2), 
+                transforms.Pad(2),  # Pad 28x28 grayscale to 32x32 to match residual architecture layers
                 transforms.ToTensor(),
-                transforms.Normalize(mean=[0.1307], std=[0.3081])
+                transforms.Normalize(mean=[0.2860], std=[0.3530])
             ])
             img = img.convert("L")
         else:
@@ -81,15 +121,18 @@ async def process_inference(file: UploadFile = File(...)):
 
     with torch.no_grad():
         outputs = model(tensor)
-        probs = F.softmax(outputs, dim=1).squeeze(0)
+        probabilities = torch.softmax(outputs, dim=1)
+        _, predicted = outputs.max(1)
 
     labels = LABELS_MAP[model_type]
-    class_probs = {labels[i]: float(probs[i]) for i in range(10)}
-    prediction = max(class_probs, key=class_probs.get)
-
+    idx = predicted.item()
+    confidence = probabilities[0][idx].item() * 100
+    prediction = labels[idx]
+    class_probs = {labels[i]: probabilities[0][i].item() for i in range(len(labels))}
     return {
         "active_model": model_type,
         "prediction": prediction,
-        "confidence": class_probs[prediction],
-        "probabilities": class_probs
+        "confidence": confidence,
+        "probabilities": {k: round(v * 100, 2) for k, v in class_probs.items()}
+        #"probabilities": {k: round(v * 100, 2) for k, v in class_probs.items()}
     }

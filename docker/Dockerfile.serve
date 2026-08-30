@@ -25,6 +25,8 @@ USER serveuser
 
 # Copy inference backend code
 COPY --chown=serveuser:servegroup src/ ./src/
+COPY --chown=serveuser:servegroup configs/ ./configs/
+COPY --chown=serveuser:servegroup checkpoints/ ./checkpoints/
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src

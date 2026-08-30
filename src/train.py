@@ -1,135 +1,135 @@
+# main.py
 import os
-import io
+import json
 import yaml
+from pathlib import Path
 import torch
-import torch.nn.functional as F
-import torchvision.transforms as transforms
-from PIL import Image
-from fastapi import FastAPI, File, UploadFile, HTTPException
+import torch.nn as nn
+from torch.utils.data import DataLoader
+
+# Import local module functions
+from dataset import get_dataloaders
 from model import get_pipeline_model
 
-app = FastAPI(title="Multi-Model Dynamic Inference Service Engine")
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Global variables updated dynamically at container boot
-model = None
-model_type = "fashion_mnist"
-
-# FIXED: Explicit label arrays mapped to your operational profiles
-LABELS_MAP = {
-    "fashion_mnist": [
-        "T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
-        "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"
-    ],
-    "cifar10": [
-        "airplane", "automobile", "bird", "cat", "deer", 
-        "dog", "frog", "horse", "ship", "truck"
-    ]
-}
-
-@app.on_event("startup")
-def configure_inference_runtime():
-    global model, model_type
-    
-    # 1. FIXED: Point directly to your single-source-of-truth configuration file
-    config_path = os.getenv("TRAINING_CONFIG_PATH", "/app/configs/training_config.yaml")
-    if not os.path.exists(config_path):
-        config_path = "D:/Project/training_config.yaml"  # Local fallback directory
+def train_one_epoch(model, loader, optimizer, criterion, device):
+    model.train()
+    total_loss = 0.0
+    correct = 0
+    total = 0
+    for inputs, targets in loader:
+        inputs, targets = inputs.to(device), targets.to(device)
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, targets)
+        loss.backward()
+        optimizer.step()
         
-    with open(config_path, "r") as f:
-        raw_config = yaml.safe_load(f)
+        total_loss += loss.item() * inputs.size(0)
+        _, predicted = outputs.max(1)
+        total += targets.size(0)
+        correct += predicted.eq(targets).sum().item()
         
-    # 2. DYNAMIC ROUTING: Determine model target from env variable or fallback yaml key
-    model_type = os.getenv("ACTIVE_MODEL", raw_config.get("active_dataset", "fashion_mnist")).lower()
-    
-    if model_type not in LABELS_MAP:
-        raise RuntimeError(f"Unsupported active serving model token configuration: {model_type}")
+    return total_loss / total, correct / total
+
+@torch.no_grad()  # Secure decorator ensuring no gradient caching during validation testing
+def evaluate(model, loader, criterion, device) -> tuple[float, float]:
+    model.eval()
+    total_loss = 0.0
+    correct = 0
+    total = 0
+    for inputs, targets in loader:
+        inputs, targets = inputs.to(device), targets.to(device)
+        outputs = model(inputs)
+        loss = criterion(outputs, targets)
         
-    # Extract the configuration parameters for the selected dataset
-    dataset_cfg = raw_config["datasets"][model_type]
+        total_loss += loss.item() * inputs.size(0)
+        _, predicted = outputs.max(1)
+        total += targets.size(0)
+        correct += predicted.eq(targets).sum().item()
+        
+    return total_loss / total, correct / total
+
+def load_config(path: str) -> dict:
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
+
+def main():
+    # Config routing
+    config_path = Path("/app/configs/training_config.yaml")
+    if not config_path.exists():
+        config_path = Path(r"D:/Project/training_config.yaml")
+        print(config_path)
+    full_config = load_config(str(config_path))
+    dataset_name = full_config["active_dataset"] 
+    config = full_config["datasets"][dataset_name]
+    data_dir = full_config["data_dir"]
+    checkpoint_dir = Path(full_config["checkpoint_dir"])
     
-    print(f"Initializing container runtime infrastructure for model: {model_type.upper()}")
+    # GPU or CPU
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # 3. FIXED: Pass config block data downstream to instantiate the correct input dimensions
+    # Model construction using the custom CNN factory settings
     model = get_pipeline_model(
-        architecture=dataset_cfg["model"]["architecture"],
-        dataset_name=model_type,
-        num_classes=int(dataset_cfg["model"]["num_classes"]),
-        use_se=bool(dataset_cfg["model"]["use_se"])
+        architecture=config["model"]["architecture"],
+        dataset_name=dataset_name,
+        num_classes=config["model"]["num_classes"],
+        in_channels=config["model"]["in_channels"],
+        use_se=config["model"]["use_se"]
+    ).to(device)
+    
+    # 4. Fetch data loaders dynamically
+    train_loader, val_loader = get_dataloaders(
+        dataset_name=dataset_name,
+        data_dir=data_dir,
+        batch_size=config["training"]["batch_size"]
     )
     
-    # Locate weight path
-    checkpoint_dir = raw_config.get("checkpoint_dir", "/app/data/checkpoints")
-    model_name = dataset_cfg["output"]["model_name"]
-    weights_path = os.path.join(checkpoint_dir, model_name)
+    # 5. Optimization tracking configurations
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config["training"]["learning_rate"])
+    criterion = nn.CrossEntropyLoss()
     
-    if not os.path.exists(weights_path):
-        # Fallback to current working data context if root absolute directory path is missing
-        weights_path = os.path.join("data/checkpoints", model_name)
+    best_val_loss = float("inf")
+    patience_counter = 0
+    patience = config["training"]["early_stopping_patience"]
+    #checkpoint_dir = Path(config["output"]["checkpoint_dir"])
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
-    if os.path.exists(weights_path):
-        print(f"Loading serialized matrix weights from checkpoint file: {weights_path}")
-        raw_checkpoint = torch.load(weights_path, map_location=device)
+    # 6. Training iteration execution
+    for epoch in range(config["training"]["epochs"]):
+        train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device)
+        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
         
-        # 4. FIXED: Safely unpack 'model_state_dict' from the dictionary payload structure
-        if isinstance(raw_checkpoint, dict) and "model_state_dict" in raw_checkpoint:
-            model.load_state_dict(raw_checkpoint["model_state_dict"])
-        else:
-            model.load_state_dict(raw_checkpoint)
+        log_entry = {
+            "epoch": epoch + 1,
+            "train_loss": round(train_loss, 4),
+            "train_accuracy": round(train_acc, 4),
+            "val_loss": round(val_loss, 4),
+            "val_accuracy": round(val_acc, 4),
+        }
+        print(json.dumps(log_entry), flush=True)
+        
+        # Checkpoint evaluation check
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            save_path = checkpoint_dir / config["output"]["model_name"]
             
-        print(f"Successfully mounted weight definitions onto architecture layers.")
-    else:
-        print(f"Warning: Checkpoint weights not found at {weights_path}. Running base weights.")
-        
-    model.to(device)
-    model.eval()
-
-@app.get("/health")
-def readiness_probe():
-    if model is not None:
-        return {"status": "healthy", "model_active": model_type}
-    raise HTTPException(status_code=500, detail="Server model uninitialized")
-
-@app.post("/predict")
-async def process_inference(file: UploadFile = File(...)):
-    if model is None:
-        raise HTTPException(status_code=500, detail="Model runtime context missing")
-        
-    try:
-        img = Image.open(io.BytesIO(await file.read()))
-        
-        # 5. FIXED: Apply preprocessing transforms explicitly matching the active dataset profile
-        if model_type == "fashion_mnist":
-            transform = transforms.Compose([
-                transforms.Resize((28, 28)),
-                transforms.Pad(2),  # Pad 28x28 grayscale to 32x32 to match residual architecture layers
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.2860], std=[0.3530])
-            ])
-            img = img.convert("L")
-        else:
-            transform = transforms.Compose([
-                transforms.Resize((32, 32)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616])
-            ])
-            img = img.convert("RGB")
+            torch.save({
+                "epoch": epoch + 1,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "val_loss": val_loss,
+                "val_accuracy": val_acc,
+            }, save_path)
             
-        tensor = transform(img).unsqueeze(0).to(device)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid payload image formatting")
+            print(json.dumps({"event": "checkpoint_saved", "path": str(save_path)}), flush=True)
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(json.dumps({"event": "early_stopping", "epoch": epoch + 1}), flush=True)
+                break
+                
+    print(json.dumps({"event": "training_complete", "best_val_loss": round(best_val_loss, 4)}), flush=True)
 
-    with torch.no_grad():
-        outputs = model(tensor)
-        probs = F.softmax(outputs, dim=1).squeeze(0)
-
-    labels = LABELS_MAP[model_type]
-    class_probs = {labels[i]: float(probs[i]) for i in range(10)}
-    prediction = max(class_probs, key=class_probs.get)
-
-    return {
-        "active_model": model_type,
-        "prediction": prediction,
-        "confidence": round(class_probs[prediction] * 100, 2),
-        "probabilities": {k: round(v * 100, 2) for k, v in class_probs.items()}
-    }
+if __name__ == "__main__":
+    main()
