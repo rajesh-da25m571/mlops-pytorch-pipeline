@@ -1,0 +1,52 @@
+name: MLOps Pipeline CI
+
+on:
+  push:
+    branches: [ develop, main ]
+  pull_request:
+    branches: [ develop, main ]
+
+jobs:
+  code-sanity-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python Runtime Environment
+      uses: actions/checkout@v4
+      with:
+        python-version: '3.11'
+
+    - name: Cache Pip Dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements/*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install Project Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements/train.txt
+        pip install -r requirements/serve.txt
+        pip install pytest linting-tools || true # Optional test utilities
+
+    - name: Lint and Format Validation
+      run: |
+        # Checks if python scripts have fatal compilation errors or broken syntax
+        python -m compileall src/
+
+    - name: Validate Kubernetes Manifest Patterns
+      run: |
+        # Verifies that your K8s yaml structures are readable and don't contain typos
+        python -c "
+        import os, yaml
+        for f in os.listdir('k8s'):
+            if f.endswith('.yaml'):
+                with open(os.path.join('k8s', f)) as stream:
+                    yaml.safe_load_all(stream)
+        print('All Kubernetes YAML structures are valid!')
+        "

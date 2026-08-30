@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: training-job
+  namespace: ml-training
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999            
+      containers:
+        - name: trainer
+          image: mlops-train:v1
+          imagePullPolicy: Never
+          env:
+            - name: CONFIG_PATH
+              value: "/app/configs/training_config.yaml"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/configs
+            - name: storage-volume
+              mountPath: /app/data
+              subPath: data
+            - name: storage-volume
+              mountPath: /app/checkpoints
+              subPath: checkpoints
+      tolerations:
+      - key: "sku"
+        operator: "Equal"
+        value: "gpu"
+        effect: "NoSchedule"
+      nodeSelector:
+        accelerator: nvidia-gpu
+      volumes:
+        - name: config-volume
+          configMap:
+            name: ml-training
+            items:
+              - key: training_config.yaml
+                path: training_config.yaml
+        - name: storage-volume
+          persistentVolumeClaim:
+            claimName: model-checkpoint-pvc
+      restartPolicy: OnFailure
