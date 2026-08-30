@@ -24,21 +24,21 @@ spec:
         fsGroup: 10001
       containers:
       - name: serving-engine
-        image: mlops-serve:v1
+        image: mlops-serve:v1     # local serving image tag
         imagePullPolicy: Never
         ports:
-        - containerPort: 8080
+        - containerPort: 8080     # The internal port exposed by your app
         env:
         - name: CONFIG_PATH
-          value: "/app/configs/training"
+          value: "/app/configs/training_config.yaml"
         - name: ACTIVE_MODEL
           valueFrom:
             configMapKeyRef:
-              name: training-config
+              name: training-config   # from configmap
               key: ACTIVE_MODEL
         resources:
           requests:
-            cpu: "500m"
+            cpu: "500m"           # Enforces assignment performance baseline
             memory: "1Gi"
           limits:
             cpu: "1"
